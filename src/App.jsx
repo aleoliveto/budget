@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 const CATS = ["Food","Transport","Housing","Utilities","Health","Fun","Shopping","Other"]
@@ -45,14 +45,6 @@ export default function App(){
   const income = useMemo(() => monthTxns.filter(t=>t.type==='income').reduce((a,b)=>a+Number(b.amount||0),0), [monthTxns])
   const remaining = (income || 0) + (budget || 0) - spent
 
-  // initial budget prompt once
-  useEffect(() => {
-    if (!budget) {
-      const input = prompt('Set your monthly base budget (GBP):', '1000')
-      const val = Number(input || 0); if (!Number.isNaN(val)) setBudget(val)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   // months list (fixed range plus any from txns)
   const months = useMemo(() => {
@@ -70,32 +62,7 @@ export default function App(){
   }, [txns])
 
   // Export/Import (local file)
-  const fileInputRef = useRef(null)
-  const pulledOnce = useRef(false)
-  const exportData = () => {
-    const payload = { version: 2, exportedAt: new Date().toISOString(), budget, txns, catBudgetsMap, defaultBudgets }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `budget-export-${new Date().toISOString().slice(0,10)}.json`
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
-  }
-  const triggerImport = () => fileInputRef.current?.click()
-  const onImportFile = (e) => {
-    const file = e.target.files?.[0]; if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result)
-        if (Array.isArray(data.txns)) setTxns(data.txns)
-        if (typeof data.budget === 'number') setBudget(data.budget)
-        if (data.catBudgetsMap && typeof data.catBudgetsMap === 'object') setCatBudgetsMap(data.catBudgetsMap)
-        if (data.defaultBudgets && typeof data.defaultBudgets === 'object') setDefaultBudgets(data.defaultBudgets)
-        alert('Import completed successfully')
-      } catch (err) { alert('Import failed: ' + err.message) }
-      finally { e.target.value = '' }
-    }
-    reader.readAsText(file)
-  }
+  const pulledOnce = React.useRef(false)
 
   useEffect(() => {
     if (!HOUSEHOLD_ID) return
@@ -137,17 +104,14 @@ export default function App(){
   return (
     <div className="app">
       <header className="header safe-top">
-        <div className="title">Budget</div>
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        <div className="title">Budget Alessandro & Patatina</div>
+        <div className="subheader">
           <select value={currentUser} onChange={e=>setCurrentUser(e.target.value)} className="icon-btn">
             <option>Anais</option>
             <option>Alessandro</option>
           </select>
           <button className="icon-btn" onClick={()=> setBudgetSheetOpen(true)}>Set Budgets</button>
           <button className="icon-btn" aria-label="Add" onClick={()=>setSheetOpen(true)}>＋</button>
-          <button className="icon-btn" onClick={exportData}>⤓</button>
-          <button className="icon-btn" onClick={triggerImport}>⤒</button>
-          <input ref={fileInputRef} type="file" accept="application/json" onChange={onImportFile} style={{ display:'none' }} />
         </div>
       </header>
 
