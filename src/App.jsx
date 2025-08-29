@@ -32,6 +32,17 @@ function App(){
   const [currentUser, setCurrentUser] = useLocal('currentUser', 'Alessandro')
   const [catBudgetsMap, setCatBudgetsMap] = useLocal('catBudgetsMap', {}) // { 'YYYY-MM': { Food: 240, ... } }
 
+  const [householdId, setHouseholdId] = useLocal('householdId', '')
+  const ensureHousehold = () => {
+    if (!householdId) {
+      const id = prompt('Set a shared Household ID (same on both phones):', 'our-home')
+      if (id) setHouseholdId(id.trim())
+    }
+  }
+
+  const [openCats, setOpenCats] = useState({})
+  const toggleCat = (cat) => setOpenCats(prev => ({ ...prev, [cat]: !prev[cat] }))
+
   const monthBudgets = useMemo(() => catBudgetsMap[filterMonth] || {}, [catBudgetsMap, filterMonth])
 
   const openBudgetSetter = () => {
@@ -43,6 +54,32 @@ function App(){
       if (!Number.isNaN(num)) next[c] = num
     }
     setCatBudgetsMap({ ...catBudgetsMap, [filterMonth]: next })
+  }
+
+  const pushCloud = async () => {
+    if (!householdId) return ensureHousehold()
+    const payload = { txns, catBudgetsMap, monthlyBudget: budget }
+    const { error } = await supabase.from('household_state').upsert({
+      household_id: householdId,
+      data: payload,
+      updated_at: new Date().toISOString()
+    })
+    if (error) alert('Cloud push failed: ' + error.message); else alert('Cloud push complete')
+  }
+
+  const pullCloud = async () => {
+    if (!householdId) return ensureHousehold()
+    const { data, error } = await supabase.from('household_state').select('data').eq('household_id', householdId).single()
+    if (error) return alert('Cloud pull failed: ' + error.message)
+    if (data?.data) {
+      const d = data.data
+      if (Array.isArray(d.txns)) setTxns(d.txns)
+      if (d.catBudgetsMap && typeof d.catBudgetsMap === 'object') setCatBudgetsMap(d.catBudgetsMap)
+      if (typeof d.monthlyBudget === 'number') setBudget(d.monthlyBudget)
+      alert('Cloud pull complete')
+    } else {
+      alert('No data found for this household yet')
+    }
   }
 
   const fileInputRef = useRef(null)
@@ -119,6 +156,9 @@ function App(){
           </select>
           <button className="icon-btn" aria-label="Set Budgets" onClick={openBudgetSetter}>Set Budgets</button>
           <button className="icon-btn" aria-label="Add" onClick={()=>setSheetOpen(true)}>＋</button>
+          <button className="icon-btn" onClick={ensureHousehold} aria-label="Set Household">Set Household</button>
+          <button className="icon-btn" onClick={pullCloud} aria-label="Cloud Pull">↓cloud</button>
+          <button className="icon-btn" onClick={pushCloud} aria-label="Cloud Push">↑cloud</button>
         </div>
       </header>
 
@@ -154,9 +194,9 @@ function App(){
             const catSpent = catItems.reduce((a,b)=>a+Number(b.amount||0),0)
             const cap = Number(monthBudgets[cat]||0)
             const remainingCat = cap ? cap - catSpent : null
-            const [open, setOpen] = useState(false)
+            const open = !!openCats[cat]
             return (
-              <div key={cat} className="catrow" onClick={()=>setOpen(!open)}>
+              <div key={cat} className="catrow" onClick={()=>toggleCat(cat)}>
                 <div style={{display:'flex', flexDirection:'column'}}>
                   <div>{cat}</div>
                   {cap ? <small className="muted">Budget {cap.toLocaleString(undefined,{style:'currency',currency:'GBP'})} • Remaining {remainingCat.toLocaleString(undefined,{style:'currency',currency:'GBP'})}</small> : <small className="muted">No budget set</small>}
