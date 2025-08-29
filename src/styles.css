@@ -1,3 +1,4 @@
+/* ---- Budget App Styles ---- */
 :root {
   --bg: #0f0f10;
   --fg: #f5f5f7;
@@ -17,7 +18,8 @@ body { margin: 0; background: var(--bg); color: var(--fg); font-family: -apple-s
 .app { max-width: 480px; margin: 0 auto; padding: 0 12px 72px; }
 .header { position: sticky; top: 0; display:flex; justify-content:space-between; align-items:center; background: var(--bg); z-index: 5; padding: 8px 4px 12px; }
 .title { font-weight: 700; font-size: 20px; letter-spacing: .2px; }
-.icon-btn { background: var(--card); color: var(--fg); border: 1px solid var(--border); padding: 6px 10px; border-radius: 10px; font-size: 14px; }
+.icon-btn { background: var(--card); color: var(--fg); border: 1px solid var(--border); padding: 6px 10px; border-radius: 10px; font-size: 14px; transition: transform .05s ease, background .2s ease; }
+.icon-btn:active { transform: scale(0.98); }
 
 .summary .row { display:flex; gap: 10px; align-items: stretch; }
 .pill { flex: 1; background: var(--card); border:1px solid var(--border); border-radius: 12px; padding: 8px 10px; display:flex; flex-direction:column; gap: 4px; min-width: 0; }
@@ -65,6 +67,10 @@ h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 8px 0; }
 .segmented .active { background: var(--fg); color: #111; }
 
 .muted { color: var(--muted); }
+
+/* Progress bar */
+.progress { height: 6px; background: #1f1f22; border-radius: 6px; overflow: hidden; margin-top: 6px; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #ffd166); }
 
 @media (max-width: 380px){
   .cards { grid-template-columns: 1fr 1fr; }

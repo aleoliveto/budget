@@ -19,6 +19,9 @@ const SUPA_URL = import.meta.env.VITE_SUPABASE_URL || 'https://hnekyjpgcbmnqhqfh
 const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuZWt5anBnY2JtbnFocWZob2RzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQwNDgyOTEsImV4cCI6MjA2OTYyNDI5MX0.NvNgOQbOrwtO-wQ604LBE7tRh7-N775EnbBIC7gASYQ'
 const supabase = createClient(SUPA_URL, SUPA_KEY)
 
+// Household identifier (no prompt). Set via env VITE_HOUSEHOLD_ID or defaults to a shared constant.
+const HOUSEHOLD_ID = (import.meta.env.VITE_HOUSEHOLD_ID || 'anais-alessandro').trim()
+
 export default function App(){
   const [budget, setBudget] = useLocal('monthlyBudget', 0)
   const [txns, setTxns] = useLocal('txns', [])
@@ -28,15 +31,8 @@ export default function App(){
   const [sheetOpen, setSheetOpen] = useState(false)
   const [currentUser, setCurrentUser] = useLocal('currentUser', 'Alessandro')
   const [catBudgetsMap, setCatBudgetsMap] = useLocal('catBudgetsMap', {}) // { 'YYYY-MM': { Food: 240, ... } }
-
-  // Household sync (no login) — enter same ID on both phones
-  const [householdId, setHouseholdId] = useLocal('householdId', '')
-  const ensureHousehold = () => {
-    if (!householdId) {
-      const id = prompt('Set a shared Household ID (same on both phones):', 'anais-alessandro')
-      if (id) setHouseholdId(id.trim())
-    }
-  }
+  const [defaultBudgets, setDefaultBudgets] = useLocal('defaultBudgets', {}) // applies when a month has no explicit budgets
+  const [budgetSheetOpen, setBudgetSheetOpen] = useState(false)
 
   // UI state for expanding categories
   const [openCats, setOpenCats] = useState({})
@@ -44,7 +40,7 @@ export default function App(){
 
   // derived
   const monthTxns = useMemo(() => txns.filter(t => t.month === filterMonth), [txns, filterMonth])
-  const monthBudgets = useMemo(() => catBudgetsMap[filterMonth] || {}, [catBudgetsMap, filterMonth])
+  const monthBudgets = useMemo(() => catBudgetsMap[filterMonth] || defaultBudgets || {}, [catBudgetsMap, defaultBudgets, filterMonth])
   const spent = useMemo(() => monthTxns.filter(t=>t.type==='expense').reduce((a,b)=>a+Number(b.amount||0),0), [monthTxns])
   const income = useMemo(() => monthTxns.filter(t=>t.type==='income').reduce((a,b)=>a+Number(b.amount||0),0), [monthTxns])
   const remaining = (income || 0) + (budget || 0) - spent
@@ -58,17 +54,26 @@ export default function App(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // months list (ensure current month exists)
+  // months list (fixed range plus any from txns)
   const months = useMemo(() => {
-    const set = new Set(txns.map(t=>t.month)); const now = new Date();
-    set.add(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`)
+    const set = new Set(txns.map(t=>t.month))
+    const now = new Date()
+    const addMonth = (y, m) => set.add(`${y}-${String(m).padStart(2,'0')}`)
+    // include current month
+    addMonth(now.getFullYear(), now.getMonth()+1)
+    // previous 12 and next 12
+    for (let i = -12; i <= 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1)
+      addMonth(d.getFullYear(), d.getMonth()+1)
+    }
     return Array.from(set).sort().reverse()
   }, [txns])
 
   // Export/Import (local file)
   const fileInputRef = useRef(null)
+  const pulledOnce = useRef(false)
   const exportData = () => {
-    const payload = { version: 1, exportedAt: new Date().toISOString(), budget, txns, catBudgetsMap }
+    const payload = { version: 2, exportedAt: new Date().toISOString(), budget, txns, catBudgetsMap, defaultBudgets }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a'); a.href = url; a.download = `budget-export-${new Date().toISOString().slice(0,10)}.json`
@@ -84,6 +89,7 @@ export default function App(){
         if (Array.isArray(data.txns)) setTxns(data.txns)
         if (typeof data.budget === 'number') setBudget(data.budget)
         if (data.catBudgetsMap && typeof data.catBudgetsMap === 'object') setCatBudgetsMap(data.catBudgetsMap)
+        if (data.defaultBudgets && typeof data.defaultBudgets === 'object') setDefaultBudgets(data.defaultBudgets)
         alert('Import completed successfully')
       } catch (err) { alert('Import failed: ' + err.message) }
       finally { e.target.value = '' }
@@ -91,29 +97,42 @@ export default function App(){
     reader.readAsText(file)
   }
 
-  // Supabase JSON sync (push/pull whole household state)
-  const pushCloud = async () => {
-    if (!householdId) return ensureHousehold()
-    const payload = { txns, catBudgetsMap, monthlyBudget: budget }
-    const { error } = await supabase.from('household_state').upsert({
-      household_id: householdId,
-      data: payload,
-      updated_at: new Date().toISOString()
-    })
-    if (error) alert('Cloud push failed: ' + error.message); else alert('Cloud push complete')
-  }
-  const pullCloud = async () => {
-    if (!householdId) return ensureHousehold()
-    const { data, error } = await supabase.from('household_state').select('data').eq('household_id', householdId).single()
-    if (error) return alert('Cloud pull failed: ' + error.message)
-    if (data?.data) {
-      const d = data.data
-      if (Array.isArray(d.txns)) setTxns(d.txns)
-      if (d.catBudgetsMap && typeof d.catBudgetsMap === 'object') setCatBudgetsMap(d.catBudgetsMap)
-      if (typeof d.monthlyBudget === 'number') setBudget(d.monthlyBudget)
-      alert('Cloud pull complete')
-    } else { alert('No data found for this household yet') }
-  }
+  useEffect(() => {
+    if (!HOUSEHOLD_ID) return
+    if (pulledOnce.current) return
+    pulledOnce.current = true
+    ;(async () => {
+      try {
+        const { data, error } = await supabase
+          .from('household_state')
+          .select('data')
+          .eq('household_id', HOUSEHOLD_ID)
+          .single()
+        if (!error && data?.data) {
+          const d = data.data
+          if (Array.isArray(d.txns)) setTxns(d.txns)
+          if (d.catBudgetsMap && typeof d.catBudgetsMap === 'object') setCatBudgetsMap(d.catBudgetsMap)
+          if (d.defaultBudgets && typeof d.defaultBudgets === 'object') setDefaultBudgets(d.defaultBudgets)
+          if (typeof d.monthlyBudget === 'number') setBudget(d.monthlyBudget)
+        }
+      } catch (e) { /* silent */ }
+    })()
+  }, [])
+
+  useEffect(() => {
+    if (!HOUSEHOLD_ID) return
+    const payload = { txns, catBudgetsMap, defaultBudgets, monthlyBudget: budget }
+    const t = setTimeout(async () => {
+      try {
+        await supabase.from('household_state').upsert({
+          household_id: HOUSEHOLD_ID,
+          data: payload,
+          updated_at: new Date().toISOString()
+        })
+      } catch (e) { /* silent */ }
+    }, 500)
+    return () => clearTimeout(t)
+  }, [txns, catBudgetsMap, defaultBudgets, budget])
 
   return (
     <div className="app">
@@ -124,22 +143,11 @@ export default function App(){
             <option>Anais</option>
             <option>Alessandro</option>
           </select>
-          <button className="icon-btn" onClick={()=>{
-            const next = { ...(catBudgetsMap[filterMonth]||{}) }
-            for (const c of CATS){
-              const val = prompt(`Monthly budget for ${c} (GBP)`, String(next[c] ?? ''))
-              if (val === null) continue
-              const num = Number(val); if (!Number.isNaN(num)) next[c] = num
-            }
-            setCatBudgetsMap({ ...catBudgetsMap, [filterMonth]: next })
-          }}>Set Budgets</button>
+          <button className="icon-btn" onClick={()=> setBudgetSheetOpen(true)}>Set Budgets</button>
           <button className="icon-btn" aria-label="Add" onClick={()=>setSheetOpen(true)}>＋</button>
           <button className="icon-btn" onClick={exportData}>⤓</button>
           <button className="icon-btn" onClick={triggerImport}>⤒</button>
           <input ref={fileInputRef} type="file" accept="application/json" onChange={onImportFile} style={{ display:'none' }} />
-          <button className="icon-btn" onClick={ensureHousehold}>Set Household</button>
-          <button className="icon-btn" onClick={pullCloud}>↓cloud</button>
-          <button className="icon-btn" onClick={pushCloud}>↑cloud</button>
         </div>
       </header>
 
@@ -181,6 +189,11 @@ export default function App(){
                 <div style={{display:'flex', flexDirection:'column'}}>
                   <div>{cat}</div>
                   {cap ? <small className="muted">Budget {currency(cap)} • Remaining {currency(remainingCat)}</small> : <small className="muted">No budget set</small>}
+                  {cap ? (
+                    <div className="progress">
+                      <div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, (catSpent/cap)*100))}%` }} />
+                    </div>
+                  ) : null}
                 </div>
                 <div>{currency(catSpent)}</div>
                 {open && (
@@ -223,8 +236,24 @@ export default function App(){
         <AddSheet onClose={()=>setSheetOpen(false)} onAdd={(rec)=>{ setTxns([...txns, rec]); setSheetOpen(false) }} defaultMonth={filterMonth} currentUser={currentUser} />
       )}
 
+      {budgetSheetOpen && (
+        <BudgetSheet
+          open={budgetSheetOpen}
+          onClose={()=> setBudgetSheetOpen(false)}
+          initial={monthBudgets}
+          monthLabel={filterMonth}
+          onSave={(vals, opts)=>{
+            // update current month budgets
+            setCatBudgetsMap({ ...catBudgetsMap, [filterMonth]: vals })
+            // optionally set defaults so future months pick them up automatically
+            if (opts?.applyDefault) setDefaultBudgets(vals)
+            setBudgetSheetOpen(false)
+          }}
+        />
+      )}
+
       <footer className="safe-bottom foot">
-        <small>Local first. Use Export/Import or ↓/↑ cloud to sync with your partner.</small>
+        <small>Synced to cloud automatically.</small>
       </footer>
     </div>
   )
@@ -289,6 +318,43 @@ function AddSheet({onClose, onAdd, defaultMonth, currentUser}){
           <button className="primary" type="submit">Save</button>
           <button type="button" onClick={onClose}>Cancel</button>
         </form>
+      </div>
+    </div>
+  )
+}
+
+function BudgetSheet({ open, onClose, initial, onSave, monthLabel }){
+  const [values, setValues] = useState(()=> ({ ...initial }))
+  const [applyDefault, setApplyDefault] = useState(true)
+
+  useEffect(()=>{ setValues({ ...initial }) }, [initial])
+
+  const update = (cat, val) => {
+    const num = Number(val)
+    setValues(v => ({ ...v, [cat]: Number.isNaN(num) ? 0 : num }))
+  }
+
+  if (!open) return null
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={e=>e.stopPropagation()}>
+        <div className="sheet-bar" />
+        <h3>Set budgets for {monthLabel}</h3>
+        <div className="form" style={{maxHeight: '60vh', overflow:'auto'}}>
+          {CATS.map(c => (
+            <label key={c}>{c}
+              <input inputMode="decimal" placeholder="0.00" value={values[c] ?? ''} onChange={e=>update(c, e.target.value)} />
+            </label>
+          ))}
+          <label style={{flexDirection:'row', alignItems:'center', gap:8}}>
+            <input type="checkbox" checked={applyDefault} onChange={e=>setApplyDefault(e.target.checked)} />
+            Also save as default for other months
+          </label>
+          <div style={{display:'flex', gap:8}}>
+            <button className="primary" onClick={()=> onSave(values, { applyDefault })}>Save</button>
+            <button onClick={onClose}>Cancel</button>
+          </div>
+        </div>
       </div>
     </div>
   )
